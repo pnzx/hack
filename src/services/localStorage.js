@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AppConstants } from '../utils/constants';
 
 const STORAGE_KEYS = {
     DEVICE_ID: 'device_id',
@@ -26,6 +27,8 @@ export const getOrCreateDeviceId = async () => {
                 points: 200,
                 totalVotes: 0,
                 totalCheckins: 0,
+                school: null,
+                major: null,
                 createdAt: new Date().toISOString(),
                 lastActiveAt: new Date().toISOString(),
             };
@@ -37,6 +40,12 @@ export const getOrCreateDeviceId = async () => {
             console.log('[웹 디버그] 기존 디바이스 로드:', devices[deviceId]);
 
             if (devices[deviceId]) {
+                // 포인트가 없거나 0이면 기본값 200으로 설정
+                if (!devices[deviceId].points || devices[deviceId].points === 0) {
+                    devices[deviceId].points = 200;
+                    await saveDevices(devices);
+                }
+                
                 devices[deviceId].lastActiveAt = new Date().toISOString();
 
                 // 오늘 출석하지 않았으면 자동 출석
@@ -64,11 +73,13 @@ export const getOrCreateDeviceId = async () => {
 
                     // 포인트 추가 (100점) - updateDevice 사용하여 안전하게 업데이트
                     const { checkinPointReward } = await import('../utils/constants');
-                    const currentPoints = devices[deviceId].points || 0;
-                    console.log('[웹 디버그] 현재 포인트:', currentPoints, '추가할 포인트:', checkinPointReward);
+                    // 포인트가 없거나 0이면 기본값 200으로 설정, 있으면 현재 포인트에 추가
+                    const currentPoints = devices[deviceId].points || 200;
+                    const newPoints = currentPoints + checkinPointReward;
+                    console.log('[웹 디버그] 현재 포인트:', currentPoints, '추가할 포인트:', checkinPointReward, '-> 최종:', newPoints);
 
                     await updateDevice(deviceId, {
-                        points: currentPoints + checkinPointReward,
+                        points: newPoints,
                         totalCheckins: (devices[deviceId].totalCheckins || 0) + 1,
                         lastActiveAt: new Date().toISOString(),
                     });
@@ -78,6 +89,10 @@ export const getOrCreateDeviceId = async () => {
                     console.log('[웹 디버그] 자동 출석 완료:', currentPoints, '->', updatedDevice?.points);
                 } else {
                     // 이미 출석했으면 디바이스 정보만 저장
+                    // 포인트가 없으면 기본값 200으로 설정
+                    if (!devices[deviceId].points || devices[deviceId].points === 0) {
+                        devices[deviceId].points = 200;
+                    }
                     await saveDevices(devices);
                     console.log('[웹 디버그] 이미 출석함, 포인트:', devices[deviceId].points);
                 }
@@ -89,6 +104,8 @@ export const getOrCreateDeviceId = async () => {
                     points: 200,
                     totalVotes: 0,
                     totalCheckins: 0,
+                    school: null,
+                    major: null,
                     createdAt: new Date().toISOString(),
                     lastActiveAt: new Date().toISOString(),
                 };
@@ -127,8 +144,14 @@ export const getDevice = async (deviceId) => {
 export const updateDevice = async (deviceId, updates) => {
     const devices = await getDevices();
     if (devices[deviceId]) {
-        const oldPoints = devices[deviceId].points;
-        devices[deviceId] = { ...devices[deviceId], ...updates };
+        const oldPoints = devices[deviceId].points || 0;
+        // 기존 필드들을 보존하면서 업데이트
+        devices[deviceId] = {
+            ...devices[deviceId],
+            ...updates,
+            // 포인트가 명시적으로 업데이트되지 않으면 기존 값 유지
+            points: updates.points !== undefined ? updates.points : devices[deviceId].points,
+        };
         await saveDevices(devices);
         console.log('[웹 디버그] updateDevice:', deviceId, oldPoints, '->', devices[deviceId].points, '포인트');
     } else {
@@ -341,7 +364,7 @@ export const submitVote = async ({ questionId, deviceId, choice }) => {
         throw new Error(`포인트가 부족합니다. (필요: ${votePointCost}P, 보유: ${device.points}P)`);
     }
 
-    // Vote 생성
+    // Vote 생성 (학교/학과 정보 포함)
     const votes = await getVotes();
     const voteId = `vote_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     votes[voteId] = {
@@ -349,6 +372,8 @@ export const submitVote = async ({ questionId, deviceId, choice }) => {
         questionId,
         deviceId,
         choice,
+        school: device.school || null,
+        major: device.major || null,
         createdAt: new Date().toISOString(),
     };
     await saveVotes(votes);
@@ -518,15 +543,187 @@ export const submitCheckin = async (deviceId) => {
     }
 
     const { checkinPointReward } = await import('../utils/constants');
+    // 포인트가 없거나 0이면 기본값 200으로 설정, 있으면 현재 포인트에 추가
+    const currentPoints = device.points || 200;
+    const newPoints = currentPoints + checkinPointReward;
+    console.log('[출석] 현재 포인트:', currentPoints, '추가:', checkinPointReward, '-> 최종:', newPoints);
+
     await updateDevice(deviceId, {
-        points: (device.points || 0) + checkinPointReward,
+        points: newPoints,
         totalCheckins: (device.totalCheckins || 0) + 1,
         lastActiveAt: new Date().toISOString(),
     });
 
     // 업데이트된 디바이스 정보 반환
     const updatedDevice = await getDevice(deviceId);
-    console.log('출석 포인트 업데이트:', device.points, '->', updatedDevice?.points);
+    console.log('[출석] 포인트 업데이트 완료:', currentPoints, '->', updatedDevice?.points);
     return updatedDevice;
+};
+
+// 통계 함수들
+// 학교별 통계
+export const getSchoolStatistics = async (school, category = 'all') => {
+    const votes = await getVotes();
+    const questions = await getQuestions();
+    
+    // 해당 학교의 투표만 필터링
+    let schoolVotes = Object.values(votes).filter(vote => vote.school === school);
+    
+    // 카테고리 필터링 (질문의 카테고리 기준)
+    if (category !== 'all') {
+        schoolVotes = schoolVotes.filter(vote => {
+            const question = questions[vote.questionId];
+            return question && question.category === category;
+        });
+    }
+    
+    if (schoolVotes.length === 0) {
+        return {
+            school,
+            totalVotes: 0,
+            votesA: 0,
+            votesB: 0,
+            aPercentage: 0,
+            bPercentage: 0,
+            categoryStats: {},
+        };
+    }
+    
+    const votesA = schoolVotes.filter(v => v.choice === 'A').length;
+    const votesB = schoolVotes.filter(v => v.choice === 'B').length;
+    const totalVotes = schoolVotes.length;
+    
+    // 카테고리별 통계
+    const categoryStats = {};
+    AppConstants.categories.filter(c => c.id !== 'all').forEach(cat => {
+        const catVotes = schoolVotes.filter(vote => {
+            const question = questions[vote.questionId];
+            return question && question.category === cat.id;
+        });
+        if (catVotes.length > 0) {
+            const catA = catVotes.filter(v => v.choice === 'A').length;
+            const catB = catVotes.filter(v => v.choice === 'B').length;
+            categoryStats[cat.id] = {
+                total: catVotes.length,
+                votesA: catA,
+                votesB: catB,
+                aPercentage: Math.round((catA / catVotes.length) * 100),
+                bPercentage: Math.round((catB / catVotes.length) * 100),
+            };
+        }
+    });
+    
+    return {
+        school,
+        totalVotes,
+        votesA,
+        votesB,
+        aPercentage: Math.round((votesA / totalVotes) * 100),
+        bPercentage: Math.round((votesB / totalVotes) * 100),
+        categoryStats,
+    };
+};
+
+// 학과별 통계
+export const getMajorStatistics = async (major, category = 'all') => {
+    const votes = await getVotes();
+    const questions = await getQuestions();
+    
+    // 해당 학과의 투표만 필터링
+    let majorVotes = Object.values(votes).filter(vote => vote.major === major);
+    
+    // 카테고리 필터링
+    if (category !== 'all') {
+        majorVotes = majorVotes.filter(vote => {
+            const question = questions[vote.questionId];
+            return question && question.category === category;
+        });
+    }
+    
+    if (majorVotes.length === 0) {
+        return {
+            major,
+            totalVotes: 0,
+            votesA: 0,
+            votesB: 0,
+            aPercentage: 0,
+            bPercentage: 0,
+            categoryStats: {},
+        };
+    }
+    
+    const votesA = majorVotes.filter(v => v.choice === 'A').length;
+    const votesB = majorVotes.filter(v => v.choice === 'B').length;
+    const totalVotes = majorVotes.length;
+    
+    // 카테고리별 통계
+    const categoryStats = {};
+    AppConstants.categories.filter(c => c.id !== 'all').forEach(cat => {
+        const catVotes = majorVotes.filter(vote => {
+            const question = questions[vote.questionId];
+            return question && question.category === cat.id;
+        });
+        if (catVotes.length > 0) {
+            const catA = catVotes.filter(v => v.choice === 'A').length;
+            const catB = catVotes.filter(v => v.choice === 'B').length;
+            categoryStats[cat.id] = {
+                total: catVotes.length,
+                votesA: catA,
+                votesB: catB,
+                aPercentage: Math.round((catA / catVotes.length) * 100),
+                bPercentage: Math.round((catB / catVotes.length) * 100),
+            };
+        }
+    });
+    
+    return {
+        major,
+        totalVotes,
+        votesA,
+        votesB,
+        aPercentage: Math.round((votesA / totalVotes) * 100),
+        bPercentage: Math.round((votesB / totalVotes) * 100),
+        categoryStats,
+    };
+};
+
+// 전체 학교 목록
+export const getAllSchools = async () => {
+    const devices = await getDevices();
+    const schools = new Set();
+    Object.values(devices).forEach(device => {
+        if (device.school) {
+            schools.add(device.school);
+        }
+    });
+    return Array.from(schools).sort();
+};
+
+// 전체 학과 목록
+export const getAllMajors = async () => {
+    const devices = await getDevices();
+    const majors = new Set();
+    Object.values(devices).forEach(device => {
+        if (device.major) {
+            majors.add(device.major);
+        }
+    });
+    return Array.from(majors).sort();
+};
+
+// 학교별 비교 통계
+export const compareSchools = async (schools, category = 'all') => {
+    const stats = await Promise.all(
+        schools.map(school => getSchoolStatistics(school, category))
+    );
+    return stats;
+};
+
+// 학과별 비교 통계
+export const compareMajors = async (majors, category = 'all') => {
+    const stats = await Promise.all(
+        majors.map(major => getMajorStatistics(major, category))
+    );
+    return stats;
 };
 

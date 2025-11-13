@@ -330,6 +330,14 @@ export default function HomeScreen() {
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.menuItem}
+          onPress={() => navigation.navigate('Statistics')}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.menuIcon}>📊</Text>
+          <Text style={styles.menuText}>통계</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.menuItem}
           onPress={() => navigation.navigate('Profile')}
           activeOpacity={0.7}
         >

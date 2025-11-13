@@ -13,6 +13,7 @@ import ProfileScreen from './src/screens/ProfileScreen';
 import HallOfFameScreen from './src/screens/HallOfFameScreen';
 import ShopScreen from './src/screens/ShopScreen';
 import HotVotesScreen from './src/screens/HotVotesScreen';
+import StatisticsScreen from './src/screens/StatisticsScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -91,6 +92,11 @@ export default function App() {
             name="Shop" 
             component={ShopScreen}
             options={{ title: '상점' }}
+          />
+          <Stack.Screen 
+            name="Statistics" 
+            component={StatisticsScreen}
+            options={{ title: '학교/학과 통계' }}
           />
         </Stack.Navigator>
       </NavigationContainer>
